@@ -44,22 +44,25 @@ agent = Agent(
     lr=1e-4,
 )
 
-# 3D bring-up phase: short 600-episode diagnostic runs to establish that the
-# agent learns at all on HomeBot3D (chain_score climbing above the ~0.1/5 random
-# baseline, reach rate rising) before committing to a long consolidation run.
-# Eval cadence is kept light so each run turns around fast under MuJoCo rendering:
-# greedy reach every 100 eps (n=10), chain every 25 eps (n=6), no held-out
-# confirms (confirm_interval=0). FINAL_POLICY/FINAL_CONFIRM measured at n=20.
+# Long consolidation run. The 600-ep diagnostic phase established that the agent
+# learns at lr=1e-4 without degrading and was STILL climbing at ep575 (chain
+# 1.6–3.0/5, first full_chain completions at 0.20). This run gives it the episodes
+# to push full_chain up. Eval n is bumped for trustworthy trending (the noisy
+# n=6/n=10 diagnostic evals hid the 3e-4 degradation): greedy n=30, chain n=20.
+# Held-out confirms are re-enabled (n=30, every 250 eps from ep500) so
+# best_confirmed.pt captures the true best over the long run.
 agent.train(
-    episodes=600,
+    episodes=1500,
     batch_size=256,
     eval_interval=100,
-    eval_episodes=10,
-    chain_eval_interval=25,
-    chain_eval_episodes=6,
+    eval_episodes=30,
+    chain_eval_interval=50,
+    chain_eval_episodes=20,
     goals_per_episode=5,
     her_anneal_start=None,
-    confirm_interval=0,
-    confirm_start=10**9,
-    final_eval_episodes=20,
+    confirm_bar=4.2,
+    confirm_episodes=30,
+    confirm_interval=250,
+    confirm_start=500,
+    final_eval_episodes=40,
 )
