@@ -38,23 +38,22 @@ agent = Agent(
     motion_window=8,
 )
 
-# Chain training at Q-DQN's real budget. Run 418 (same config, 1800 eps)
-# ended still climbing: sustained ep1560-1790 = 4.27/5, 62.9% full-chain
-# (ties run 409's lifetime numbers at half the budget), last 10 windows
-# 4.52/5, 82%, spin 0.031-0.048. Q-DQN run 411 needed ~3880 of 4500 eps to
-# peak (4.83/5, 83.3% sustained, pinned at 5.0 after ~ep2500) — this run
-# gives chain training the same 4500 episodes to consolidate. Also new:
-# periodic held-out confirms (raw-best confirms saturate at 5.0 — run 418's
-# ep700 confirm blocked all later ones) and FINAL_POLICY + FINAL_CONFIRM
-# both measured at n=40.
+# 3D bring-up phase: short 600-episode diagnostic runs to establish that the
+# agent learns at all on HomeBot3D (chain_score climbing above the ~0.1/5 random
+# baseline, reach rate rising) before committing to a long consolidation run.
+# Eval cadence is kept light so each run turns around fast under MuJoCo rendering:
+# greedy reach every 100 eps (n=10), chain every 25 eps (n=6), no held-out
+# confirms (confirm_interval=0). FINAL_POLICY/FINAL_CONFIRM measured at n=20.
 agent.train(
-    episodes=4500,
+    episodes=600,
     batch_size=256,
-    eval_interval=50,
-    eval_episodes=20,
-    chain_eval_interval=10,
+    eval_interval=100,
+    eval_episodes=10,
+    chain_eval_interval=25,
+    chain_eval_episodes=6,
     goals_per_episode=5,
     her_anneal_start=None,
-    confirm_interval=250,
-    confirm_start=500,
+    confirm_interval=0,
+    confirm_start=10**9,
+    final_eval_episodes=20,
 )

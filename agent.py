@@ -104,14 +104,13 @@ class Agent:
                                       device=self.device, requires_grad=True)
         self.alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=lr)
 
-        # GPU_OFFLOAD=1 (injected by Beekeeper) holds the replay buffer in VRAM so
-        # sampling stays on-device — no per-step CPU->GPU transfer of image
-        # batches. The image buffer is large — max_size * 2 * 3*96*96 uint8
-        # (~10 GB at 200k) — but fits alongside the model + MuJoCo render context
-        # on the 24 GB card. Without the flag the buffer lives in system RAM
-        # (safe default that never competes for VRAM); either way batches are
-        # sampled to self.device (output_device below) for the gradient step.
-        buffer_device = self.device if os.environ.get("GPU_OFFLOAD") == "1" else "cpu"
+        # Replay buffer hard-pinned to the GPU: on-device sampling, no per-step
+        # CPU->GPU transfer of image batches. The image buffer is large
+        # (~10 GB at 200k) but fits alongside the model + MuJoCo render context on
+        # the 24 GB card. NB: intentionally ignoring GPU_OFFLOAD for now — Beekeeper
+        # is injecting it as 0 despite the project setting, so honoring it parked
+        # the buffer in RAM. Revisit once the Beekeeper env-var plumbing is fixed.
+        buffer_device = self.device
         self.memory = ReplayBuffer(
             max_size=max_buffer_size,
             input_shape=self.obs_shape,
@@ -395,7 +394,7 @@ class Agent:
               goals_per_episode=5, her_anneal_start=None,
               confirm_bar=4.2, confirm_episodes=30,
               confirm_interval=250, confirm_start=500,
-              final_eval_episodes=40):
+              final_eval_episodes=40, chain_eval_episodes=10):
         """Chain-style training on the base (non-goal) env.
 
         Each episode: one reset, then `goals_per_episode` sequential random-tile
@@ -552,7 +551,8 @@ class Agent:
                       f"det_reach={det_rate:.3f}")
 
             if episode % chain_eval_interval == 0:
-                chain_score, chain_full, chain_spin = self.chain_eval()
+                chain_score, chain_full, chain_spin = self.chain_eval(
+                    n_episodes=chain_eval_episodes)
                 writer.add_scalar("Eval/chain_score",        chain_score, episode)
                 writer.add_scalar("Eval/chain_full",         chain_full,  episode)
                 writer.add_scalar("Eval/chain_spin_fraction", chain_spin, episode)
