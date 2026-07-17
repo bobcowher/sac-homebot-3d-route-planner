@@ -36,6 +36,12 @@ agent = Agent(
     head_layers=4,
     use_motion=True,
     motion_window=8,
+    # lr=1e-4 (down from the 3e-4 default): at 3e-4 the policy peaked ~ep75–200
+    # then degraded (critic drift under the collapsed-alpha exploit-only actor) —
+    # end-of-run chain 0.6/5 vs a peak of 1.4/5. 1e-4 starts slower but does NOT
+    # degrade (end ≈ peak) and reaches a higher ceiling (chain 1.6–2.7/5 in the
+    # 2nd half, reach up to 0.8). See the bring-up experiments (exp4 vs exp5).
+    lr=1e-4,
 )
 
 # 3D bring-up phase: short 600-episode diagnostic runs to establish that the
