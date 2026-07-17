@@ -4,8 +4,8 @@ tensorboard
 torch
 torchvision
 mujoco>=3.1
-# Pinned to a commit SHA, not @main: pip treats an unchanged git URL as
-# "already satisfied" and never re-clones, so env changes silently never reach
-# a downstream install. Bump this SHA whenever homebot-3d changes.
-# a92c054 = package texture PNGs so non-editable installs ship assets/textures/.
-git+ssh://git@github.com/bobcowher/homebot-3d.git@a92c054f6b0c9a7853097a31ddda162ff494e551
+# Pin to a commit SHA and ALSO bump homebot-3d's version on every change: pip
+# reports a git dep "already satisfied" if the installed package name+version
+# matches, so a SHA change alone won't reinstall — the version must differ too.
+# 30439f1 = v0.1.1, ships assets/textures PNGs in non-editable installs.
+git+ssh://git@github.com/bobcowher/homebot-3d.git@30439f124855110ba9941e87f1e22f6f6b6c7576
