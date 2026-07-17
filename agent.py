@@ -13,24 +13,25 @@ from buffer import ReplayBuffer
 from episode_buffer import EpisodeBuffer
 from goal_geometry import (world_coords, spin_fraction, spin_thresholds,
                            SPIN_WINDOW, reach_reward, distance,
-                           eval_step_budget)
+                           eval_step_budget, ROBOT_STEP)
 from motion import MotionState, motion_dim
 from models.actor import GaussianActor
 from models.critic import TwinQCritic
 from task_chain import DEFAULT_CHAIN
+from homebot3d.world import tile_center
+from homebot3d.constants import REACH_RADIUS
 from torch.utils.tensorboard.writer import SummaryWriter
 
 # Continuous action dimension: [linear, angular] ∈ [-1, 1]^2
 ACTION_DIM = 2
 # goal_dim=6: [robot_x, robot_y, goal_x, goal_y, sin(angle), cos(angle)]
 GOAL_DIM = 6
-GOAL_SCALE = (864., 576., 864., 576., 1., 1.)
+# Normalizes goal coords to ~[0,1] in the goal encoder. World extent of the
+# default house map: cols(27)*TILE(0.5)=13.5 m by rows(18)*TILE(0.5)=9.0 m.
+GOAL_SCALE = (13.5, 9.0, 13.5, 9.0, 1., 1.)
 
-# Chain eval reach overrides (match env interaction radii)
-from homebot.goals import GOAL_THRESHOLD
-_DOOR_REACH  = 47.0
-_TRASH_REACH = 31.0
-_REACH_OVERRIDE = {"go_to_door": _DOOR_REACH, "collect_trash": _TRASH_REACH}
+# homebot3d uses one REACH_RADIUS for trash, pickups and dropoffs, so — unlike the
+# 2D env's per-leg door/trash radii — every chain leg reaches at REACH_RADIUS.
 
 
 def process_observation(raw_obs):
@@ -133,10 +134,10 @@ class Agent:
         return self.log_alpha.exp().item()
 
     def _sample_goal(self, base):
-        """Random floor-tile goal in pixel coords (no env coupling)."""
+        """Random floor-tile goal in world metres (no env coupling)."""
         tiles = base._map.valid_floor_tiles()
         col, row = tiles[int(base.np_random.integers(0, len(tiles)))]
-        gx, gy = base._map.tile_to_pixel(col, row)
+        gx, gy = tile_center(col, row)
         return np.array([float(gx), float(gy)], dtype=np.float32)
 
     def _to_tensor(self, obs, goal, motion):
@@ -240,7 +241,7 @@ class Agent:
         """
         self.actor.eval()
         successes = 0
-        budget = max(1, 1000 // self.frame_skip)
+        step_norm = ROBOT_STEP * self.frame_skip
 
         for _ in range(n_episodes):
             raw_obs, _ = self.env.reset()
@@ -248,11 +249,14 @@ class Agent:
             base = self.env.unwrapped
             r    = base._robot
             desired_goal = self._sample_goal(base)
-            ms = MotionState(ACTION_DIM, self.motion_window)
+            ms = MotionState(ACTION_DIM, self.motion_window, step=step_norm)
+            budget = max(1, eval_step_budget(
+                distance(r.x, r.y, desired_goal[0], desired_goal[1]))
+                // self.frame_skip)
 
             for _ in range(budget):
                 goal_vec = world_coords(r.x, r.y, desired_goal[0], desired_goal[1],
-                                        r.angle)
+                                        r.heading)
                 motion = ms.vec(r.x, r.y)
                 if stochastic:
                     action = self.select_action(obs, goal_vec, motion)
@@ -261,7 +265,7 @@ class Agent:
                 ms.commit(r.x, r.y, action)
                 raw_next, _, term, trunc, _ = self.env.step(action)
                 obs = process_observation(raw_next)
-                if distance(r.x, r.y, desired_goal[0], desired_goal[1]) <= GOAL_THRESHOLD:
+                if distance(r.x, r.y, desired_goal[0], desired_goal[1]) <= REACH_RADIUS:
                     successes += 1
                     break
                 if term or trunc:
@@ -283,9 +287,9 @@ class Agent:
 
         if self._chain_env is None:
             self._chain_env = gym.make(
-                "HomeBot2D-V1", render_mode="rgb_array",
-                action_mode="continuous",
-                obs_resolution=(96, 96), n_trash=2, max_steps=20000,
+                "HomeBot3D-V1", render_mode="rgb_array",
+                goals=("trash", "drink", "package"),
+                width=96, height=96, n_trash=2, max_steps=40000,
                 map_name="default", random_start=True,
             )
             if self.frame_skip > 1:
@@ -294,7 +298,7 @@ class Agent:
 
         self.actor.eval()
         n_legs = len(DEFAULT_CHAIN)
-        move_min, net_max = spin_thresholds(SPIN_WINDOW)
+        move_min, net_max = spin_thresholds(SPIN_WINDOW, ROBOT_STEP * self.frame_skip)
         total, full = 0, 0
         spins = []
 
@@ -302,27 +306,24 @@ class Agent:
             base = self._chain_env.unwrapped
             raw_obs, _ = self._chain_env.reset(seed=seed_offset + seed)
             obs = process_observation(raw_obs)
-            ms = MotionState(ACTION_DIM, self.motion_window)
+            ms = MotionState(ACTION_DIM, self.motion_window,
+                             step=ROBOT_STEP * self.frame_skip)
 
             targets = [(name, resolve_goal(base, name)) for name in DEFAULT_CHAIN]
             ep_legs = []
             for name, (gx, gy) in targets:
                 robot = base._robot
                 skip = getattr(self._chain_env, "_skip", 1)
-                if name == "collect_trash":
-                    budget = 600 // skip
-                else:
-                    budget = max(1, eval_step_budget(
-                        distance(robot.x, robot.y, gx, gy))) // skip
-                reach = _REACH_OVERRIDE.get(name, GOAL_THRESHOLD)
+                budget = max(1, eval_step_budget(
+                    distance(robot.x, robot.y, gx, gy)) // skip)
+                reach = REACH_RADIUS
 
-                # Temporarily override reach for the leg helper
                 positions = [(robot.x, robot.y)]
                 steps = 0
                 reached = False
                 before = world_state(base)
                 while steps < budget:
-                    goal_vec = world_coords(robot.x, robot.y, gx, gy, robot.angle)
+                    goal_vec = world_coords(robot.x, robot.y, gx, gy, robot.heading)
                     motion = ms.vec(robot.x, robot.y)
                     action = self.select_action(obs, goal_vec, motion)
                     ms.commit(robot.x, robot.y, action)
@@ -385,14 +386,15 @@ class Agent:
               eval_interval=50, eval_episodes=20, chain_eval_interval=10,
               goals_per_episode=5, her_anneal_start=None,
               confirm_bar=4.2, confirm_episodes=30,
-              confirm_interval=250, confirm_start=500):
+              confirm_interval=250, confirm_start=500,
+              final_eval_episodes=40):
         """Chain-style training on the base (non-goal) env.
 
         Each episode: one reset, then `goals_per_episode` sequential random-tile
         goals. Heading and the motion window persist across goal switches, so
         training covers the mid-chain state distribution that chain_eval
         actually visits — the old single-goal Goal-env loop never sampled it.
-        Reward/termination are computed here (distance <= GOAL_THRESHOLD, the
+        Reward/termination are computed here (distance <= REACH_RADIUS, the
         same rule HER relabeling uses); each leg flushes to HER under its own
         goal, with per-leg budgets mirroring chain_eval's eval_step_budget.
         """
@@ -416,7 +418,7 @@ class Agent:
         writer = SummaryWriter(
             f'runs/{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}_{run_tag}')
 
-        her_reward = lambda a, d, info: reach_reward(a, d, GOAL_THRESHOLD)
+        her_reward = lambda a, d, info: reach_reward(a, d, REACH_RADIUS)
 
         for episode in range(episodes):
             raw_obs, _ = self.env.reset()
@@ -425,7 +427,8 @@ class Agent:
             r    = base._robot
             # Motion state persists across goal switches within the episode —
             # that carryover IS the chain-context distribution we're after.
-            ms = MotionState(ACTION_DIM, self.motion_window)
+            ms = MotionState(ACTION_DIM, self.motion_window,
+                             step=ROBOT_STEP * self.frame_skip)
 
             k_eff = self.episode_buffer.K
             if her_anneal_start is not None and episode >= her_anneal_start:
@@ -447,10 +450,10 @@ class Agent:
                     // self.frame_skip)
 
                 for _step in range(budget):
-                    angle_prev   = r.angle
+                    angle_prev   = r.heading
                     pos_prev     = np.array([r.x, r.y], dtype=np.float32)
                     goal_vec     = world_coords(r.x, r.y, desired_goal[0],
-                                                desired_goal[1], r.angle)
+                                                desired_goal[1], r.heading)
                     motion_prev  = ms.vec(r.x, r.y)
 
                     action = self.select_action(obs, goal_vec, motion_prev)
@@ -458,10 +461,10 @@ class Agent:
 
                     raw_next, _, env_term, trunc, _ = self.env.step(action)
                     pos_next   = np.array([r.x, r.y], dtype=np.float32)
-                    angle_next = r.angle
+                    angle_next = r.heading
 
                     reached = distance(pos_next[0], pos_next[1], desired_goal[0],
-                                       desired_goal[1]) <= GOAL_THRESHOLD
+                                       desired_goal[1]) <= REACH_RADIUS
                     reward = 1.0 if reached else 0.0
                     # Goal-conditioned terminal on reach (HER done semantics);
                     # leg timeout is truncation, never terminal.
@@ -581,11 +584,13 @@ class Agent:
         # the end-of-training policy first (run 418's best artifact was the
         # final policy and it went unmeasured), then the best confirmed
         # checkpoint. Whichever wins is the deployable number.
-        f_score, f_full, f_spin = self.chain_eval(n_episodes=40, seed_offset=2000)
+        f_score, f_full, f_spin = self.chain_eval(
+            n_episodes=final_eval_episodes, seed_offset=2000)
         writer.add_scalar("Eval/final_policy_score", f_score, episodes)
         writer.add_scalar("Eval/final_policy_full",  f_full,  episodes)
         self.save_best(episodes - 1, f_score, f_full, path="checkpoints/final.pt")
-        print(f"FINAL_POLICY ep={episodes - 1} n=40: chain_score={f_score:.3f}/5 | "
+        print(f"FINAL_POLICY ep={episodes - 1} n={final_eval_episodes}: "
+              f"chain_score={f_score:.3f}/5 | "
               f"chain_full={f_full:.3f} | spin={f_spin:.3f}")
 
         ckpt_path = ("checkpoints/best_confirmed.pt"
@@ -595,10 +600,11 @@ class Agent:
             ckpt = torch.load(ckpt_path, map_location=self.device,
                               weights_only=True)
             self.actor.load_state_dict(ckpt["actor"])
-            f_score, f_full, f_spin = self.chain_eval(n_episodes=40,
-                                                      seed_offset=2000)
+            f_score, f_full, f_spin = self.chain_eval(
+                n_episodes=final_eval_episodes, seed_offset=2000)
             writer.add_scalar("Eval/final_confirm_score", f_score, episodes)
             writer.add_scalar("Eval/final_confirm_full",  f_full,  episodes)
-            print(f"FINAL_CONFIRM ckpt={ckpt_path} ep={ckpt['episode']} n=40: "
+            print(f"FINAL_CONFIRM ckpt={ckpt_path} ep={ckpt['episode']} "
+                  f"n={final_eval_episodes}: "
                   f"chain_score={f_score:.3f}/5 | chain_full={f_full:.3f} | "
                   f"spin={f_spin:.3f}")

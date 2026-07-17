@@ -1,20 +1,26 @@
 from agent import Agent
 import gymnasium as gym
-import homebot  # noqa: F401  (side-effect env registration)
+import homebot3d  # noqa: F401  (side-effect env registration)
 
-FRAME_SKIP = 2
+# One env.step is one mj_step (0.01 s). At MAX_LIN=1.0 m/s that is ~0.01 m/step,
+# so an agent action needs to repeat over several physics steps to cover useful
+# ground. skip=10 -> ~0.1 m per agent step (~135 steps to cross the 13.5 m house),
+# matching the control granularity the 2D env had. The FrameSkipWrapper renders
+# only the final frame of each skip, so a larger skip also means fewer renders.
+FRAME_SKIP = 10
 
 # Chain-style training: the base env (same one chain_eval deploys on), not the
 # single-goal Goal env. Reward/termination live in the training loop now
-# (distance <= GOAL_THRESHOLD, identical to the HER relabel rule). max_steps
-# is a generous ceiling; per-leg budgets in agent.train() do the real limiting.
+# (distance <= REACH_RADIUS, identical to the HER relabel rule). max_steps is a
+# generous ceiling; per-leg budgets in agent.train() do the real limiting.
 env = gym.make(
-    "HomeBot2D-V1",
+    "HomeBot3D-V1",
     render_mode="rgb_array",
-    action_mode="continuous",
-    obs_resolution=(96, 96),
+    goals=("trash", "drink", "package"),
+    width=96,
+    height=96,
     n_trash=2,
-    max_steps=20000,
+    max_steps=40000,
     map_name="default",
     random_start=True,
 )

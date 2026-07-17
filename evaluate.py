@@ -9,9 +9,9 @@ import cv2
 import numpy as np
 import torch
 import gymnasium as gym
-import homebot  # noqa: F401
+import homebot3d  # noqa: F401
 
-from goal_geometry import world_coords
+from goal_geometry import world_coords, ROBOT_STEP
 from models.actor import GaussianActor
 from motion import MotionState
 from agent import ACTION_DIM, GOAL_DIM, GOAL_SCALE
@@ -54,9 +54,9 @@ def main():
     actor = load_actor(args.checkpoint, device, args.goal_layers, args.head_layers)
 
     env = gym.make(
-        "HomeBot2D-Goal-V1", render_mode="rgb_array", action_mode="continuous",
-        obs_resolution=(96, 96), n_trash=1, max_steps=1000,
-        map_name="default", goals=["collect_trash"], random_start=True,
+        "HomeBot3D-Goal-V1", render_mode="rgb_array",
+        width=96, height=96, n_trash=1, max_steps=8000,
+        map_name="default", goals=("trash",), random_start=True,
     )
     if args.frame_skip > 1:
         from env_wrappers import FrameSkipWrapper
@@ -69,11 +69,11 @@ def main():
         desired_goal = raw_obs["desired_goal"]
         base = env.unwrapped
         r = base._robot
-        ms = MotionState(ACTION_DIM, 8)
+        ms = MotionState(ACTION_DIM, 8, step=ROBOT_STEP * args.frame_skip)
         done = False
         ep_reward = 0.0
         while not done:
-            goal_vec = world_coords(r.x, r.y, desired_goal[0], desired_goal[1], r.angle)
+            goal_vec = world_coords(r.x, r.y, desired_goal[0], desired_goal[1], r.heading)
             motion = ms.vec(r.x, r.y)
             obs_t = obs.unsqueeze(0).float().to(device) / 255.0
             goal_t = torch.as_tensor(goal_vec, dtype=torch.float32, device=device).unsqueeze(0)

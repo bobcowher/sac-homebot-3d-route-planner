@@ -13,7 +13,7 @@ from collections import deque
 
 import numpy as np
 
-from goal_geometry import ROBOT_STEP_PX
+from goal_geometry import ROBOT_STEP
 
 MOTION_WINDOW = 8
 
@@ -24,7 +24,7 @@ def motion_dim(action_dim: int, window: int = 1) -> int:
 
 
 def make_motion(action_dim, last_action, dx, dy, net_dx=0.0, net_dy=0.0,
-                step=ROBOT_STEP_PX, window=1):
+                step=ROBOT_STEP, window=1):
     """[ last_action | dx/step | dy/step | net_dx/(W*step) | net_dy/(W*step) ]
 
     last_action is a float array of shape (action_dim,); None -> zeros.
@@ -53,9 +53,13 @@ class MotionState:
         raw_next, ... = env.step(action)
     """
 
-    def __init__(self, action_dim: int, window: int = 1):
+    def __init__(self, action_dim: int, window: int = 1, step: float = ROBOT_STEP):
         self.adim = action_dim
         self.window = window
+        # Displacement-per-agent-step used to normalize velocity/net features.
+        # Under frame-skip the per-step move is ROBOT_STEP * frame_skip, so pass
+        # that here to keep features ~[-1, 1] at full speed.
+        self.step = step
         self.reset()
 
     def reset(self):
@@ -74,7 +78,7 @@ class MotionState:
         else:
             net_dx = net_dy = 0.0
         return make_motion(self.adim, self.last_action, dx, dy,
-                           net_dx, net_dy, window=self.window)
+                           net_dx, net_dy, step=self.step, window=self.window)
 
     def commit(self, x, y, action):
         """action: np.ndarray of shape (action_dim,)"""

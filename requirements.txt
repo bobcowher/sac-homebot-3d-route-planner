@@ -3,8 +3,9 @@ tensorboard
 --extra-index-url https://download.pytorch.org/whl/cu129
 torch
 torchvision
+mujoco>=3.1
 # Pinned to a commit SHA, not @main: pip treats an unchanged git URL as
 # "already satisfied" and never re-clones, so env changes silently never reach
-# the Beekeeper install. Bump this SHA whenever homebot changes.
-# de9c437 = tighten package pickup to the doorway (own _DOOR_RANGE, 47px).
-git+https://github.com/bobcowher/gym-homebot-2d.git@de9c437bf12980b58bf287c47d2085b5f4c21760
+# a downstream install. Bump this SHA whenever homebot-3d changes.
+# 7ac7390 = homebot-3d HEAD at 3D integration time.
+git+ssh://git@github.com/bobcowher/homebot-3d.git@7ac73909144eb4291bbcab99fee2fab641dac67e

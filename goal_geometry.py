@@ -1,14 +1,25 @@
 """Geometry helpers for the SAC reacher eval.
 
 Stateless and unit-testable without a gym import.
+
+Metric (3D) units. Constants mirror homebot3d.constants — kept as literals here
+so the module stays gym/mujoco-free; update these if the env constants change:
+  REACH_RADIUS = 0.75 m   (goal reached inside this planar distance)
+  MAX_LIN      = 1.0 m/s  (top linear speed at action = 1.0)
+  timestep     = 0.01 s   (one mj_step)
 """
 import math
 import numpy as np
 
-# Env trash pickup: robot.RADIUS(15) + tile_size(32) * _TRASH_RANGE(0.5) = 31 px.
-GOAL_RADIUS = 31.0
-ROBOT_STEP_PX = 4.0      # homebot DISCRETE_SPEED (also max continuous displacement per step)
-EVAL_BUDGET_MULT = 3
+# Goal reached when the robot centre is within this planar distance (metres).
+# homebot3d.constants.REACH_RADIUS.
+GOAL_RADIUS = 0.75
+# Max displacement per underlying env step (one mj_step) at full speed:
+# MAX_LIN(1.0 m/s) * timestep(0.01 s) = 0.01 m. Analogous to the 2D ROBOT_STEP_PX.
+ROBOT_STEP = 0.01
+# Slightly more slack than the 2D value (3): 3D legs also spend steps accelerating
+# (velocity-servo tau ~0.1 s) and turning toward the goal.
+EVAL_BUDGET_MULT = 4
 
 # Spinning / limit-cycle detection
 SPIN_WINDOW = 8
@@ -34,8 +45,15 @@ def reach_radius_at(episode, start, end, anneal_start, anneal_end):
     return start + (end - start) * frac
 
 
-def spin_thresholds(window: int = SPIN_WINDOW):
-    return 0.5 * window * ROBOT_STEP_PX, 2.0 * ROBOT_STEP_PX
+def spin_thresholds(window: int = SPIN_WINDOW, step: float = ROBOT_STEP):
+    """(move_min, net_max) for spin detection, in metres.
+
+    `step` is the displacement-per-recorded-sample used to scale the thresholds.
+    Positions are sampled once per agent step (= frame_skip mj_steps), so callers
+    that frame-skip should pass step = ROBOT_STEP * frame_skip; otherwise the
+    thresholds are calibrated to a single mj_step and never trip.
+    """
+    return 0.5 * window * step, 2.0 * step
 
 
 def spin_fraction(positions, window, move_min, net_max):
@@ -76,6 +94,7 @@ def world_coords(rx: float, ry: float, gx: float, gy: float,
                  angle: float = 0.0) -> np.ndarray:
     """Goal state: [robot_x, robot_y, goal_x, goal_y, sin(angle), cos(angle)].
 
+    Coordinates are world metres; `angle` is the robot heading (radians).
     Continuous SAC needs explicit heading because the action is (linear, angular)
     in the robot frame — without heading the Q(s,a)/policy mapping is non-Markovian
     from (image, goal_xy) alone. Sin/cos avoids angle wraparound.
@@ -85,4 +104,8 @@ def world_coords(rx: float, ry: float, gx: float, gy: float,
 
 
 def eval_step_budget(init_dist: float) -> int:
-    return EVAL_BUDGET_MULT * max(1, math.ceil(max(init_dist, GOAL_RADIUS) / ROBOT_STEP_PX))
+    """Underlying-env-step budget to reach a goal `init_dist` metres away.
+
+    Returned in mj_step units; the caller divides by frame_skip to get agent steps.
+    """
+    return EVAL_BUDGET_MULT * max(1, math.ceil(max(init_dist, GOAL_RADIUS) / ROBOT_STEP))

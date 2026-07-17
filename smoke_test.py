@@ -6,16 +6,16 @@ load path — without the expensive full-size evals.
 """
 import torch
 import gymnasium as gym
-import homebot  # noqa: F401
+import homebot3d  # noqa: F401
 
 from agent import Agent
 
-FRAME_SKIP = 2
+FRAME_SKIP = 10
 
 env = gym.make(
-    "HomeBot2D-V1", render_mode="rgb_array", action_mode="continuous",
-    obs_resolution=(96, 96), n_trash=2, max_steps=20000,
-    map_name="default", random_start=True,
+    "HomeBot3D-V1", render_mode="rgb_array",
+    goals=("trash", "drink", "package"), width=96, height=96,
+    n_trash=2, max_steps=40000, map_name="default", random_start=True,
 )
 from env_wrappers import FrameSkipWrapper
 env = FrameSkipWrapper(env, skip=FRAME_SKIP)
@@ -27,10 +27,11 @@ agent = Agent(env=env, max_buffer_size=5000, use_motion=True, motion_window=8)
 #    confirm_bar=0 + confirm_interval=1 force the [Confirm] path, and the
 #    FINAL_POLICY/FINAL_CONFIRM n=40 evals run at the end.
 agent.train(episodes=2, batch_size=999999, run_tag="smoke",
-            eval_interval=10000, chain_eval_interval=1,
+            eval_interval=10000, eval_episodes=1, chain_eval_interval=1,
             goals_per_episode=2,
             confirm_bar=0.0, confirm_episodes=1,
-            confirm_interval=1, confirm_start=1)
+            confirm_interval=1, confirm_start=1,
+            final_eval_episodes=1)
 print(f"SMOKE train loop OK | buffer fill={agent.memory.mem_ctr} "
       f"env_steps={agent.total_env_steps}")
 assert agent.memory.mem_ctr > 0, "HER flush stored nothing"
