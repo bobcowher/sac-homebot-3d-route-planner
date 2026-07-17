@@ -104,13 +104,14 @@ class Agent:
                                       device=self.device, requires_grad=True)
         self.alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=lr)
 
-        # GPU_OFFLOAD=1 (injected by Beekeeper) parks the replay buffer in system
-        # RAM instead of VRAM. The image buffer is large — max_size * 2 * 3*96*96
-        # uint8 (~11 GB at 200k) — so offloading frees VRAM for the model and
-        # MuJoCo's render context on a shared GPU. Batches are still sampled to
-        # self.device for the gradient step (output_device below), so training
-        # stays on the GPU either way; only storage moves.
-        buffer_device = "cpu" if os.environ.get("GPU_OFFLOAD") == "1" else self.device
+        # GPU_OFFLOAD=1 (injected by Beekeeper) holds the replay buffer in VRAM so
+        # sampling stays on-device — no per-step CPU->GPU transfer of image
+        # batches. The image buffer is large — max_size * 2 * 3*96*96 uint8
+        # (~10 GB at 200k) — but fits alongside the model + MuJoCo render context
+        # on the 24 GB card. Without the flag the buffer lives in system RAM
+        # (safe default that never competes for VRAM); either way batches are
+        # sampled to self.device (output_device below) for the gradient step.
+        buffer_device = self.device if os.environ.get("GPU_OFFLOAD") == "1" else "cpu"
         self.memory = ReplayBuffer(
             max_size=max_buffer_size,
             input_shape=self.obs_shape,
