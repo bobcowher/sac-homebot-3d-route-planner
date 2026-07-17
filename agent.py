@@ -53,7 +53,8 @@ class Agent:
                  gamma: float = 0.99,
                  tau: float = 0.005,
                  alpha_init: float = 0.2,
-                 fixed_alpha: float = None) -> None:
+                 fixed_alpha: float = None,
+                 alpha_min: float = None) -> None:
         self.env = env
         self.device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
         self.gamma = gamma
@@ -99,6 +100,14 @@ class Agent:
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=lr)
 
         self._fixed_alpha = fixed_alpha
+        # Optional entropy-temperature floor: auto-alpha here collapses toward
+        # ~1e-3 once the tanh-squashed policy gets confident (log_prob spikes near
+        # the action bounds drive alpha down), and the policy then overexploits a
+        # drifting critic and degrades (exp1: peaked ep200, decayed after). A floor
+        # keeps auto-alpha's fast early adaptation but preserves a minimum of
+        # exploration/entropy regularization. None = no floor (original behavior).
+        self.alpha_min = alpha_min
+        self._log_alpha_min = math.log(alpha_min) if alpha_min is not None else None
         self.target_entropy = -float(ACTION_DIM)
         self.log_alpha = torch.tensor(math.log(alpha_init), dtype=torch.float32,
                                       device=self.device, requires_grad=True)
@@ -228,6 +237,9 @@ class Agent:
             self.alpha_optimizer.zero_grad()
             alpha_loss.backward()
             self.alpha_optimizer.step()
+            if self._log_alpha_min is not None:
+                with torch.no_grad():
+                    self.log_alpha.clamp_(min=self._log_alpha_min)
 
         # Polyak update target critics
         self._polyak_update()
